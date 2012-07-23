@@ -15,85 +15,157 @@
 
 #include "packetbuffer.h"
 #include <QFile>
+#include <QDir>
 #include <qDebug>
 
 PacketBuffer::PacketBuffer()
 {
+    // Empty constructor
 }
 
 /*
  * This function is a public function that accepts the data filename as the first
  * parameter. It is reponsible for zeroing out the ping and pong buffers and resetting
- * all the counter values to their initial state. It then opens the data file in the write
- * mode.
+ * all the counter values to their initial state.
  */
-int PacketBuffer::initBuffer(QString outputFileName)
+int PacketBuffer::initBuffer()
 {
     int counter = 0;
 
-    // check for valid input data
-    if (outputFileName.size() < 1)
-        return E_INVALID_PARAM;
-
     // initialize both the PING and PONG buffers and set the active buffer to PING
-    for (counter = 0; counter < PB_BUFFER_SIZE; counter++) {
-        this->pingBuffer[counter] = 0;
+    for (counter = 0; counter < PB_MAX_BUFFER_SIZE; counter++) {
+        pingBuffer[counter] = 0;
     }
-    for (counter = 0; counter < PB_BUFFER_SIZE; counter++) {
-        this->pongBuffer[counter] = 0;
+    for (counter = 0; counter < PB_MAX_BUFFER_SIZE; counter++) {
+        pongBuffer[counter] = 0;
     }
-    this->bufferIndex = 0;
-    this->activeBuffer = PING;
-    this->pingCount = 0;
-    this->pongCount = 0;
+    bufferIndex = 0;
+    activeBuffer = PING;
+    pingCounter = 0;
+    pongCounter = 0;
 
-    this->packetPerFileCount = 0;
-    this->curFileCount = 0;
-    this->curFileName = outputFileName;
-
-    this->dataFile.setFileName(this->curFileName + ".csv");
-    if (!this->dataFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qDebug() << this->dataFile.errorString();
-        return E_FILE_ERROR;
-    }
-
-    this->dataStream.setDevice(&this->dataFile);
-    if (this->dataStream.status() != QTextStream::Ok) {
-        return E_STREAM_ERROR;
-    }
+    curFileCount = 0;
+    curFileName = "";
+    curFolderName = "";
+    packetPerFileCount = 0;
 
     // Creating and initializing shared moemory for storing latest packets to be shown in GUI
-    this->sharedMemory.setKey("ATOMBERG");
-    this->sharedMemorySize = sizeof(this->pingBuffer);
-    if (!this->sharedMemory.create(this->sharedMemorySize)) {
+    sharedMemory.setKey("TESTAPP");
+    if (!sharedMemory.create(PB_SHARED_MEMORY_SIZE + sizeof(sharedMemoryCounter))) {
+        qDebug() << "Failed to create shared memory segment";
         return E_SMEM_FAIL_CREATE;
     }
-    this->sharedMemoryTo = (char *)this->sharedMemory.data();   // Saving pointer to the shared memory data segment
+    sharedMemoryTo = (char *)sharedMemory.data();   // Saving pointer to the shared memory data segment
+    sharedMemoryTail = (unsigned long *)(sharedMemoryTo + PB_SHARED_MEMORY_SIZE);   // Saving location of the tail counter
+    sharedMemoryCounter = 0;
 
     return SUCCESS;
 }
 
 /*
  * This function will call switchBuffer() to switch to a empty buffer and
+ * force flushing the pending data to disk. It then closes the current file and
+ * the shared memory segment
+ */
+void PacketBuffer::closeBuffer()
+{
+    sharedMemory.detach();
+}
+
+/*
+ * This function will call switchBuffer() to switch to a empty buffer and
  * force flushing the pending data to disk. It then closes the current file.
  */
-int PacketBuffer::closeBuffer()
+int PacketBuffer::closeDataFile()
 {
     int ret;
 
     // switch buffers to force flush the data to disk
-    ret = this->switchBuffer();
+    ret = switchBuffer();
     if (ret != 0) {
         return ret;
     }
 
     // force the operating system to flush the data to disk
-    ret = this->dataFile.flush();
+    ret = dataFile.flush();
     if (!ret) {
         return E_DISK_FLUSH;
     }
 
-    this->dataFile.close();
+    dataFile.close();
+    return SUCCESS;
+}
+
+// Resetting all internal counters including PING-PONG buffer, file and shared memory counter
+void PacketBuffer::resetCounters()
+{
+    // Resetting all counter values
+    bufferIndex = 0;
+    activeBuffer = PING;
+    pingCounter = 0;
+    pongCounter = 0;
+
+    curFileCount = 0;
+    packetPerFileCount = 0;
+
+    sharedMemoryCounter = 0;
+    *sharedMemoryTail = sharedMemoryCounter;
+}
+
+/*
+ * This function sets the current folder name and also the initial filename to be used
+ * later on. This function also resets all counter values in use and closes any data files
+ * that were previously opened. This makes sure that the application is starting clean
+ * after calling this function.
+ */
+int PacketBuffer::setFolderName(QString outputFolderName, QString initialFileName)
+{
+    // Closing any previous file if open and resetting the current file and folder name
+    dataFile.close();
+    curFileName = "";
+    curFolderName = "";
+
+    resetCounters();    // Reset all internal counter values including PING-PONG buffer, file and shared memory counter
+
+    // ************ FRESH START OF THE APPLICATION FROM HEREON ***************** //
+
+    // check if folder already exists, if not create a new folder
+    if (QDir(outputFolderName).exists()) {
+        qDebug() << "Folder " << outputFolderName << " already exists";
+    } else if (!QDir().mkpath(outputFolderName)) {                  // QDir()::mkpath() will create all parent folders if necessary
+        qDebug() << "Failed to create folder " << outputFolderName;
+        curFolderName = "";
+        return E_FOLDER_ERROR;
+    }
+    curFolderName = outputFolderName;
+
+    curFileCount = 0;
+
+    dataFile.setFileName(curFolderName + "/" + initialFileName + ".csv");
+    if (!dataFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qDebug() << dataFile.errorString();
+        return E_FILE_ERROR;
+    }
+
+    dataStream.setDevice(&dataFile);
+    if (dataStream.status() != QTextStream::Ok) {
+        return E_STREAM_ERROR;
+    }
+
+    curFileName = initialFileName;
+
+    // Update the data from the channelSetttings file
+    translator.updateSettings();
+
+    // Set the maximum buffer size depending on the sampling rate. If the sampling rate is less then 5
+    // then switch after every addpacket.
+    if (translator.samplingRate > 5) {
+        maxBuffer = ((translator.samplingRate / 5) * PB_PACKET_SIZE);
+    } else {
+        maxBuffer = PB_PACKET_SIZE;
+    }
+    maxUseBuffer = maxBuffer - PB_PACKET_SIZE;
+
     return SUCCESS;
 }
 
@@ -108,27 +180,27 @@ int PacketBuffer::addPacket(unsigned char *data) {
     int ret;
 
     // check if enough space is available in the current buffer
-    if (this->bufferIndex > PB_MAX_USED_BUFFER)
+    if (bufferIndex > maxUseBuffer)
         return E_BUFFER_FULL;
 
     // add data packet to the current active buffer and increament the bufferIndex
-    if (this->activeBuffer == PING) {
+    if (activeBuffer == PING) {
         // add packet to ping buffer
         for (counter = 0; counter < PB_PACKET_SIZE; counter++) {
-            this->pingBuffer[this->bufferIndex] = *(data + counter);
-            this->bufferIndex++;
+            pingBuffer[bufferIndex] = *(data + counter);
+            bufferIndex++;
         }
     } else {
         // add packet to pong buffer
         for (counter = 0; counter < PB_PACKET_SIZE; counter++) {
-            this->pongBuffer[this->bufferIndex] = *(data + counter);
-            this->bufferIndex++;
+            pongBuffer[bufferIndex] = *(data + counter);
+            bufferIndex++;
         }
     }
 
     // check if current buffer is full then switch buffers
-    if (this->bufferIndex == PB_BUFFER_SIZE) {
-        ret = this->switchBuffer();
+    if (bufferIndex >= maxBuffer) {
+        ret = switchBuffer();
         if (ret != 0) {
             return ret;
         }
@@ -147,35 +219,35 @@ int PacketBuffer::switchBuffer(void) {
     int ret;
 
     // Switch the buffer, save the current bufferIndex to the corresponding pingCount/pongCount
-    if (this->activeBuffer == PING) {
+    if (activeBuffer == PING) {
         // check if the pong buffer is empty before switching
-        if (this->pongCount != 0)
+        if (pongCounter != 0)
             return E_SWITCH_TO_NON_EMPTY;
 
-        this->activeBuffer = PONG;
+        activeBuffer = PONG;
         // if bufferIndex is already zero then directly set the pingCount to zero
-        if (this->bufferIndex == 0)
-            this->pingCount = 0;
+        if (bufferIndex == 0)
+            pingCounter = 0;
         else
-            this->pingCount = this->bufferIndex - 1;
+            pingCounter = bufferIndex - 1;
     } else {
         // check if the ping buffer is empty before switching
-        if (this->pingCount != 0)
+        if (pingCounter != 0)
             return E_SWITCH_TO_NON_EMPTY;
 
-        this->activeBuffer = PING;
+        activeBuffer = PING;
         // if bufferIndex is already zero then directly set the pongCount to zero
-        if (this->bufferIndex == 0)
-            this->pongCount = 0;
+        if (bufferIndex == 0)
+            pongCounter = 0;
         else
-           this->pongCount = this->bufferIndex - 1;
+           pongCounter = bufferIndex - 1;
     }
 
     // reset the new buffer index to zero
-    this->bufferIndex = 0;
+    bufferIndex = 0;
 
     // flush the other buffer to disk to empty it
-    ret = this->flushData();
+    ret = flushData();
     if (ret != 0) {
         return ret;
     }
@@ -188,7 +260,9 @@ int PacketBuffer::switchBuffer(void) {
  * the buffer counter value to zero. At the end of this function a flush is called
  * on the current active file to force operating system to flush data to disk.
  * This function also will check if the max packet per file count is reached, on which
- * it will call the changeFileName() function.
+ * it will call the changeFileName() function. Also copy the non-active buffer to
+ * a shared memory segment shared with the GUI application and updated the counter
+ * located at the end of the shared memory
  */
 int PacketBuffer::flushData(void) {
     unsigned int counter = 0;
@@ -196,63 +270,64 @@ int PacketBuffer::flushData(void) {
 
     // If the number of packets per file reaches the max then
     // change the filename
-    if (this->packetPerFileCount >= PB_MAX_PACKET_PER_FILE) {
-        ret = this->changeFileName();
+    if (packetPerFileCount >= PB_MAX_PACKET_PER_FILE) {
+        ret = changeFileName();
         if (ret != 0) {
             return ret;
         }
     }
 
     // Flush the alternate buffer to disk and set its pingCount/pongCount to zero after flushing all the data
-    if (this->activeBuffer == PING) {
+    if (activeBuffer == PING) {
         // check if there is any data to flush
-        if (this->pongCount == 0)
+        if (pongCounter == 0)
             return SUCCESS;
 
         // flush entire buffer data to disk
-        for (counter = 0; counter <= this->pongCount; counter++) {
-            this->dataStream << this->pongBuffer[counter];
-            if (((counter + 1) % PB_PACKET_SIZE) == 0) {
-                this->dataStream << "\n";
-                this->packetPerFileCount++;
-            } else {
-                this->dataStream << ",";
-            }
+        for (counter = 0; counter < pongCounter; counter += PB_PACKET_SIZE) {
+            dataStream << translator.convertToHuman(&pongBuffer[counter]);
+            packetPerFileCount++;
         }
-        this->pongCount = 0;
+
+        // copying data to shared memory for display on the GUI
+        memcpy((sharedMemoryTo + sharedMemoryCounter), &pongBuffer, pongCounter + 1);   // since zero index[n]. size is n + 1
+        sharedMemoryCounter += pongCounter + 1;
+        // If the shared memory counter reaches the maximum then reset it
+        if (sharedMemoryCounter >= PB_SHARED_MEMORY_SIZE) {
+            sharedMemoryCounter = 0;
+        }
+        *sharedMemoryTail = sharedMemoryCounter;
+
+        pongCounter = 0;
     } else {
         // check if there is any data to flush
-        if (this->pingCount == 0)
+        if (pingCounter == 0)
             return SUCCESS;
 
         // flush entire buffer data to disk
-        for (counter = 0; counter <= this->pingCount; counter++) {
-            this->dataStream << this->pingBuffer[counter];
-            if (((counter + 1) % PB_PACKET_SIZE) == 0) {
-                this->dataStream << "\n";
-                this->packetPerFileCount++;
-            } else {
-                this->dataStream << ",";
-            }
+        for (counter = 0; counter < pingCounter; counter += PB_PACKET_SIZE) {
+            dataStream << translator.convertToHuman(&pingBuffer[counter]);
+            packetPerFileCount++;
         }
-        this->pingCount = 0;
+
+        // copying data to shared memory for display on the GUI
+        memcpy((sharedMemoryTo + sharedMemoryCounter), &pingBuffer, pingCounter + 1);   // since zero index[n]. size is n + 1
+        sharedMemoryCounter += pingCounter + 1;
+        // If the shared memory counter reaches the maximum then reset it
+        if (sharedMemoryCounter >= PB_SHARED_MEMORY_SIZE) {
+            sharedMemoryCounter = 0;
+        }
+        *sharedMemoryTail = sharedMemoryCounter;
+
+        pingCounter = 0;
     }
 
     // force the operating system to flush the data to disk
-    ret = this->dataFile.flush();
+    ret = dataFile.flush();
     if (!ret) {
-        qDebug() << this->dataFile.errorString();
-        return this->dataFile.error();
+        qDebug() << dataFile.errorString();
+        return dataFile.error();
     }
-
-    // copying data to shared memory for display on the GUI
-    this->sharedMemory.lock();
-    if (this->activeBuffer == PING) {
-        memcpy(this->sharedMemoryTo, &this->pongBuffer, this->sharedMemorySize);
-    } else {
-        memcpy(this->sharedMemoryTo, &this->pingBuffer, this->sharedMemorySize);
-    }
-    this->sharedMemory.unlock();
 
     return SUCCESS;
 }
@@ -268,26 +343,27 @@ int PacketBuffer::changeFileName()
     int ret;
 
     // force the operating system to flush the data to disk and close the current file
-    ret = this->dataFile.flush();
+    ret = dataFile.flush();
     if (!ret) {
-        qDebug() << this->dataFile.errorString();
-        return this->dataFile.error();
+        qDebug() << dataFile.errorString();
+        return dataFile.error();
     }
-    this->dataFile.close();
+    dataFile.close();
 
     // resetting the packet per file counter to zero to start couunting again
-    this->packetPerFileCount = 0;
-    this->curFileCount++;
+    packetPerFileCount = 0;
+    // increament the filename counter which is appended to the filename
+    curFileCount++;
 
     // open a new file by appending the curFileCount value
-    this->dataFile.setFileName(this->curFileName + "_" + QString::number(this->curFileCount) + ".csv");
-    if (!this->dataFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
-        qDebug() << this->dataFile.errorString();
+    dataFile.setFileName(curFolderName + "/" + curFileName + "_" + QString::number(curFileCount) + ".csv");
+    if (!dataFile.open(QIODevice::WriteOnly | QIODevice::Text)) {
+        qDebug() << dataFile.errorString();
         return E_FILE_ERROR;
     }
 
-    this->dataStream.setDevice(&this->dataFile);
-    if (this->dataStream.status() != QTextStream::Ok) {
+    dataStream.setDevice(&dataFile);
+    if (dataStream.status() != QTextStream::Ok) {
         return E_STREAM_ERROR;
     }
 
