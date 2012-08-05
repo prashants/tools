@@ -1,18 +1,16 @@
 /*
- * Author : Prashant Shah <pshah.mumbai@gmail.com>
+ * ext3dump - Utility to dump raw file data from ext2/3 partition
  *
- * This program is free software: you can redistribute it and/or modify
- * it under the terms of the GNU General Public License as published by
- * the Free Software Foundation, either version 3 of the License, or
- * (at your option) any later version.
+ * Written in 2012 by Prashant P Shah <pshah.mumbai@gmail.com>
  *
- * This program is distributed in the hope that it will be useful,
- * but WITHOUT ANY WARRANTY; without even the implied warranty of
- * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE. See the
- * GNU General Public License for more details.
+ * To the extent possible under law, the author(s) have dedicated
+ * all copyright and related and neighboring rights to this software
+ * to the public domain worldwide. This software is distributed
+ * without any warranty.
  *
- * You should have received a copy of the GNU General Public License
- * along with this program. If not, see <http://www.gnu.org/licenses/>.
+ * You should have received a copy of the CC0 Public Domain Dedication
+ * along with this software.
+ * If not, see <http://creativecommons.org/publicdomain/zero/1.0/>.
  */
 
 #include <stdio.h>
@@ -66,7 +64,7 @@ int main(int argc, char *argv[])
 	if (fd < 0) {
 		printf("Error opening file\n");
 		return 1;
-	}		
+	}
 	// Opening file system
 	fs = open(argv[2], O_RDONLY);
 	if (fs < 0) {
@@ -102,7 +100,7 @@ int main(int argc, char *argv[])
 
 	printf("Inode number: %d (offset = %d)\n", inode_number, inode_grp_offset);
 	printf("Block number: %d (super block = %d)\n", blk_grp_number, superblock_present);
-	
+
 	close(fd);
 
 
