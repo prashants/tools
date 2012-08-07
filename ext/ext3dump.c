@@ -20,19 +20,24 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 
+// Standard ext3 constants
 #define SUPER_BLOCK_SIZE	1024
 #define MAX_BLOCK_SIZE		8192
 #define MAX_INODE_SIZE		1024
 #define GDT_ENTRY_SIZE		32
 
-int INODE_SIZE;
-int BLOCK_SIZE;
-int INODE_PER_GROUP;
-int BLOCKS_PER_GROUP;
-int TOTAL_BLOCKS;
-int GDT_SIZE;
+// File system specific variables
+int INODE_SIZE;			// Inode size
+int BLOCK_SIZE;			// Block size
+int INODE_PER_GROUP;		// Number of inodes per block group
+int BLOCKS_PER_GROUP;		// Number of blocks per block group
+int TOTAL_BLOCKS;		// Total number of blocks in file system
+int GDT_SIZE;			// Gblobal Descriptor Table size
+int RESERVE_GDT;		// Number of blocks reserved for GDT
+int SUPERBLOCK;			// Superblock size
+int FIRST_BLOCK;		// Block number of the first block
 
-int fs;
+int fs;				// The /dev entry for the file system
 
 int init_fs(void);
 
@@ -44,11 +49,12 @@ int main(int argc, char *argv[])
 	int inode_number, blk_grp_number;
 	int inode_grp_offset;
 	int superblock_present;
+	int offset;
 
 	uint32_t data32;
 	uint16_t data16;
 
-	// buffers
+	// setting up buffers
 	unsigned char blk[MAX_BLOCK_SIZE];
 	unsigned char blk_bitmap[MAX_BLOCK_SIZE];
 	unsigned char inode_bitmap[MAX_BLOCK_SIZE];
@@ -65,13 +71,17 @@ int main(int argc, char *argv[])
 		printf("Error opening file\n");
 		return 1;
 	}
-	// Opening file system
+	// Open file system
 	fs = open(argv[2], O_RDONLY);
 	if (fs < 0) {
 		printf("Error opening file system\n");
 		return 1;
 	}
-	init_fs();
+	// Initialize all the file system specific structures
+	if (init_fs() != 0) {
+		printf("Error reading extfs information from super block\n");
+		return 1;
+	}
 
 	// get the inode numner of file
 	if (fstat(fd, &filestat) < 0) {
@@ -83,19 +93,19 @@ int main(int argc, char *argv[])
 	blk_grp_number = (inode_number / INODE_PER_GROUP);
 	inode_grp_offset = ((inode_number - 1) % INODE_PER_GROUP) * INODE_SIZE;
 
-	// Super block copy present in block number 1, 2, and all other block numbers divisible by 3, 5, 7
+	// Super block copy present in block number 1, 3, 5, 7, 9
 	superblock_present = 0;
 	if (blk_grp_number == 0)
 		superblock_present = 1;
-	if (blk_grp_number == 1)
+	else if (blk_grp_number == 1)
 		superblock_present = 1;
-	if (blk_grp_number == 3)
+	else if (blk_grp_number == 3)
 		superblock_present = 1;
-	if (blk_grp_number == 5)
+	else if (blk_grp_number == 5)
 		superblock_present = 1;
-	if (blk_grp_number == 7)
+	else if (blk_grp_number == 7)
 		superblock_present = 1;
-	if (blk_grp_number == 9)
+	else if (blk_grp_number == 9)
 		superblock_present = 1;
 
 	printf("Inode number: %d (offset = %d)\n", inode_number, inode_grp_offset);
@@ -103,45 +113,45 @@ int main(int argc, char *argv[])
 
 	close(fd);
 
-
-	// reading inode bitmap
+	// read inode bitmap, if super block is present then the offset of
+	// inode bitmap is after adding all the super block offsets
 	if (superblock_present == 1) {
-		printf("Inode bitmap at : %d\n", (blk_grp_number * BLOCKS_PER_GROUP) + 259 + GDT_SIZE);
-		if (lseek(fs, ((blk_grp_number * BLOCKS_PER_GROUP) + 259 + GDT_SIZE) * BLOCK_SIZE, 0) < 0) {
+		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + SUPERBLOCK + GDT_SIZE + RESERVE_GDT + 1;
+		printf("Inode bitmap at : %d\n", offset);
+		if (lseek(fs, offset * BLOCK_SIZE, 0) < 0) {
 			printf("Failed to seek to inode bitmap\n");
 			return 1;
 		}
 	} else {
-		printf("Inode bitmap at : %d\n", (blk_grp_number * BLOCKS_PER_GROUP) + 2);
-		if (lseek(fs, ((blk_grp_number * BLOCKS_PER_GROUP) + 2) * BLOCK_SIZE, 0) < 0) {
+		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + 1;
+		printf("Inode bitmap at : %d\n", offset);
+		if (lseek(fs, offset * BLOCK_SIZE, 0) < 0) {
 			printf("Failed to seek to inode bitmap\n");
 			return 1;
 		}
 	}
 	read(fs, inode_bitmap, BLOCK_SIZE);
-	printf("Inode bitmap dump :\n");
-	for (i = 0; i < BLOCK_SIZE; i++) {
-		printf("%d ", inode_bitmap[i]);
-	}
-	printf("\n");
 
-	// reading inode table
+	// read inode table, if super block is present then the offset of
+	// inode bitmap is after adding all the super block offsets
 	if (superblock_present == 1) {
-		printf("Inode table at : %d\n", (blk_grp_number * BLOCKS_PER_GROUP) + 260 + GDT_SIZE);
-		printf("Inode table entry at : %d\n", (((blk_grp_number * BLOCKS_PER_GROUP) + 260 + GDT_SIZE) * BLOCK_SIZE) + inode_grp_offset);
-		if (lseek(fs, (((blk_grp_number * BLOCKS_PER_GROUP) + 260 + GDT_SIZE) * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
+		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + SUPERBLOCK + GDT_SIZE + RESERVE_GDT + 2;
+		printf("Inode table at : %d\n", offset);
+		printf("Inode table entry at : %d\n", (offset * BLOCK_SIZE) + inode_grp_offset);
+		if (lseek(fs, (offset * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
 			printf("failed to seek to inode table\n");
 			return 1;
 		}
 	} else {
-		printf("Inode table at : %d\n", (blk_grp_number * BLOCKS_PER_GROUP) + 3);
-		printf("Inode table at : %d\n", (((blk_grp_number * BLOCKS_PER_GROUP) + 3) * BLOCK_SIZE) + inode_grp_offset);
-		if (lseek(fs, (((blk_grp_number * BLOCKS_PER_GROUP) + 3) * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
+		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + 2;
+		printf("Inode table at : %d\n", offset);
+		printf("Inode table at : %d\n", (offset * BLOCK_SIZE) + inode_grp_offset);
+		if (lseek(fs, (offset * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
 			printf("failed to seek to inode table\n");
 			return 1;
 		}
 	}
-
+	// dump inode table data
 	read(fs, inode, INODE_SIZE);
 	printf("Inode dump :\n");
 	for (i = 0; i < INODE_SIZE; i++) {
@@ -150,16 +160,21 @@ int main(int argc, char *argv[])
 	printf("\n");
 
 	// decoding inode data which in is LE format
+	// http://wiki.osdev.org/Ext2
+
+	// user id
 	data16 = inode[3];
 	data16 = (data16 << 8) | inode[2];
 	printf("User ID : %d\n", data16);
 
+	// file size
 	data32 = inode[7];
 	data32 = (data32 << 8) | inode[6];
 	data32 = (data32 << 8) | inode[5];
 	data32 = (data32 << 8) | inode[4];
 	printf("Size : %d\n", data32);
 
+	// address of direct block 0
 	data32 = inode[43];
 	data32 = (data32 << 8) | inode[42];
 	data32 = (data32 << 8) | inode[41];
@@ -172,6 +187,7 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 	read(fs, blk, BLOCK_SIZE);
+	// Showing upto max first 1024 bytes by adding \0 in the data buffer
 	blk[1023] = '\0';
 	printf("Data 0 : %s\n", blk);
 
@@ -180,8 +196,8 @@ int main(int argc, char *argv[])
 	return 0;
 }
 
-// This function will read the super block from the filesystem
-// and initialize all varaibles
+// This function reads the super block from the filesystem
+// and initialize all file system specific variables
 // http://wiki.osdev.org/Ext2
 int init_fs(void)
 {
@@ -196,12 +212,9 @@ int init_fs(void)
 		printf("Failed to seek to superblock\n");
 		return 1;
 	}
-
 	read(fs, superblk, SUPER_BLOCK_SIZE);
 
-	BLOCK_SIZE = 1024;
-	printf("Blocks size : %d\n", BLOCK_SIZE);
-
+	// Calculating various file system parameters from super block
 	data32 = superblk[7];
 	data32 = (data32 << 8) | superblk[6];
 	data32 = (data32 << 8) | superblk[5];
@@ -228,9 +241,28 @@ int init_fs(void)
 	INODE_SIZE = data16;
 	printf("Inode size : %d\n", INODE_SIZE);
 
+	SUPERBLOCK = 1;
+	if (INODE_SIZE == 128) {
+		BLOCK_SIZE = 1024;	// TODO : Hardcoded
+		RESERVE_GDT = 256;	// TODO : Hardcoded
+		FIRST_BLOCK = 1;	// TODO : Hardcoded
+	} else if (INODE_SIZE == 256) {
+		BLOCK_SIZE = 4096;	// TODO : Hardcoded
+		RESERVE_GDT = 183;	// TODO : Hardcoded
+		FIRST_BLOCK = 0;	// TODO : Hardcoded
+	} else {
+		printf("Unknown Block Size : %d\n", BLOCK_SIZE);
+		return 1;
+	}
+	printf("Blocks size : %d\n", BLOCK_SIZE);
+	printf("Super Block : %d\n", SUPERBLOCK);
+	printf("Reserve GDT size : %d\n", RESERVE_GDT);
+	printf("First Block : %d\n", FIRST_BLOCK);
+
 	// Calculating number of blocks required for GDT
 	data32 = ceil((float)TOTAL_BLOCKS / BLOCKS_PER_GROUP) * GDT_ENTRY_SIZE;
 	GDT_SIZE = ceil((float)data32 / BLOCK_SIZE);
 	printf("GDT size : %d\n", GDT_SIZE);
 	return 0;
 }
+
