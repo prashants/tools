@@ -34,7 +34,7 @@ int BLOCKS_PER_GROUP;		// Number of blocks per block group
 int TOTAL_BLOCKS;		// Total number of blocks in file system
 int GDT_SIZE;			// Gblobal Descriptor Table size
 int RESERVE_GDT;		// Number of blocks reserved for GDT
-int SUPERBLOCK;			// Superblock size
+int SUPERBLOCK_SIZE;		// Superblock size in bytes
 int FIRST_BLOCK;		// Block number of the first block
 
 int fs;				// The /dev entry for the file system
@@ -116,7 +116,7 @@ int main(int argc, char *argv[])
 	// read inode bitmap, if super block is present then the offset of
 	// inode bitmap is after adding all the super block offsets
 	if (superblock_present == 1) {
-		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + SUPERBLOCK + GDT_SIZE + RESERVE_GDT + 1;
+		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + SUPERBLOCK_SIZE + GDT_SIZE + RESERVE_GDT + 1;
 		printf("Inode bitmap at : %d\n", offset);
 		if (lseek(fs, offset * BLOCK_SIZE, 0) < 0) {
 			printf("Failed to seek to inode bitmap\n");
@@ -135,7 +135,7 @@ int main(int argc, char *argv[])
 	// read inode table, if super block is present then the offset of
 	// inode bitmap is after adding all the super block offsets
 	if (superblock_present == 1) {
-		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + SUPERBLOCK + GDT_SIZE + RESERVE_GDT + 2;
+		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + SUPERBLOCK_SIZE + GDT_SIZE + RESERVE_GDT + 2;
 		printf("Inode table at : %d\n", offset);
 		printf("Inode table entry at : %d\n", (offset * BLOCK_SIZE) + inode_grp_offset);
 		if (lseek(fs, (offset * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
@@ -241,22 +241,26 @@ int init_fs(void)
 	INODE_SIZE = data16;
 	printf("Inode size : %d\n", INODE_SIZE);
 
-	SUPERBLOCK = 1;
-	if (INODE_SIZE == 128) {
-		BLOCK_SIZE = 1024;	// TODO : Hardcoded
-		RESERVE_GDT = 256;	// TODO : Hardcoded
-		FIRST_BLOCK = 1;	// TODO : Hardcoded
-	} else if (INODE_SIZE == 256) {
-		BLOCK_SIZE = 4096;	// TODO : Hardcoded
-		RESERVE_GDT = 183;	// TODO : Hardcoded
-		FIRST_BLOCK = 0;	// TODO : Hardcoded
-	} else {
-		printf("Unknown Block Size : %d\n", BLOCK_SIZE);
-		return 1;
-	}
+	data32 = superblk[27];
+	data32 = (data32 << 8) | superblk[26];
+	data32 = (data32 << 8) | superblk[25];
+	data32 = (data32 << 8) | superblk[24];
+	BLOCK_SIZE = 1024 << data32;    // Shift 1024 by data32 bits
 	printf("Blocks size : %d\n", BLOCK_SIZE);
-	printf("Super Block : %d\n", SUPERBLOCK);
+
+	data16 = superblk[207];
+	data16 = (data16 << 8) | superblk[206];
+	RESERVE_GDT = data16;
 	printf("Reserve GDT size : %d\n", RESERVE_GDT);
+
+	SUPERBLOCK_SIZE = 1;		// Super block size is always 1024 bytes = max 1 block
+	printf("Super Block : %d\n", SUPERBLOCK_SIZE);
+
+	if (BLOCK_SIZE == 1024) {
+		FIRST_BLOCK = 1;
+	} else {
+		FIRST_BLOCK = 0;
+	}
 	printf("First Block : %d\n", FIRST_BLOCK);
 
 	// Calculating number of blocks required for GDT
