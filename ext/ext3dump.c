@@ -57,7 +57,7 @@ int main(int argc, char *argv[])
 	uint32_t data32;
 	uint16_t data16;
 
-	// setting up buffers
+	// Setting up buffers
 	unsigned char blk[MAX_BLOCK_SIZE];
 	unsigned char blk_bitmap[MAX_BLOCK_SIZE];
 	unsigned char inode_bitmap[MAX_BLOCK_SIZE];
@@ -78,17 +78,20 @@ int main(int argc, char *argv[])
 	fs = open(argv[2], O_RDONLY);
 	if (fs < 0) {
 		printf("Error opening file system\n");
+		close(fd);
 		return 1;
 	}
 	// Initialize all the file system specific structures
 	if (init_fs() != 0) {
 		printf("Error reading extfs information from super block\n");
+		close(fs); close(fd);
 		return 1;
 	}
 
-	// get the inode numner of file
+	// Read inode number of file
 	if (fstat(fd, &filestat) < 0) {
 		printf("Error reading inode number for a file\n");
+		close(fs); close(fd);
 		return 1;
 	}
 
@@ -96,7 +99,7 @@ int main(int argc, char *argv[])
 	blk_grp_number = (inode_number / INODE_PER_GROUP);
 	inode_grp_offset = ((inode_number - 1) % INODE_PER_GROUP) * INODE_SIZE;
 
-	// Super block copy present in block number 1, 3, 5, 7, 9
+	// Super block copy present in block number 0, 1 and power of 3, 5, 7
 	superblock_present = 0;
 	if (blk_grp_number == 0)
 		superblock_present = 1;
@@ -117,43 +120,46 @@ int main(int argc, char *argv[])
 	close(fd);
 
 	if (read_gdt(blk_grp_number) < 0) {
+		close(fs);
 		return 1;
 	}
 
 	printf("Inode table entry at : %d\n", (inode_table_addr * BLOCK_SIZE) + inode_grp_offset);
 	if (lseek(fs, (inode_table_addr * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
 		printf("Failed to seek to inode table entry\n");
+		close(fs);
 		return 1;
 	}
 
-	// read inode table
+	// Read inode table
 	read(fs, inode, INODE_SIZE);
 
-	// decoding inode data which in is LE format
+	// Decoding inode data which in is LE format
 	// http://wiki.osdev.org/Ext2
 
-	// user id
+	// User id
 	data16 = inode[3];
 	data16 = (data16 << 8) | inode[2];
 	printf("User ID : %d\n", data16);
 
-	// file size
+	// File size
 	data32 = inode[7];
 	data32 = (data32 << 8) | inode[6];
 	data32 = (data32 << 8) | inode[5];
 	data32 = (data32 << 8) | inode[4];
 	printf("Size : %d\n", data32);
 
-	// address of direct block 0
+	// Address of direct block 0
 	data32 = inode[43];
 	data32 = (data32 << 8) | inode[42];
 	data32 = (data32 << 8) | inode[41];
 	data32 = (data32 << 8) | inode[40];
 	printf("Direct Block 0 : %d\n", data32);
 
-	// reading inode data
+	// Reading inode data
 	if (lseek(fs, data32 * BLOCK_SIZE, 0) < 0) {
 		printf("Failed to seek to inode data block 0\n");
+		close(fs);
 		return 1;
 	}
 	read(fs, blk, BLOCK_SIZE);
@@ -162,19 +168,22 @@ int main(int argc, char *argv[])
 	printf("Data 0 : %s\n", blk);
 
 	close(fs);
-
 	return 0;
 }
 
-// This function reads the super block from the filesystem
-// and initialize all file system specific variables
-// http://wiki.osdev.org/Ext2
+/**
+ * init_fs() - Initialize the filesystem variables from super block
+ *
+ * This function reads the super block from the filesystem
+ * and initialize all file system specific variables
+ * http://wiki.osdev.org/Ext2
+ */
 int init_fs(void)
 {
 	uint32_t data32;
 	uint16_t data16;
 
-	// buffers
+	// Buffers
 	unsigned char superblk[SUPER_BLOCK_SIZE];
 
 	// Reading file system super block
@@ -241,6 +250,16 @@ int init_fs(void)
 	return 0;
 }
 
+/**
+ * read_gdt() - Read GDT table and get the block group descriptor entry
+ *
+ * This function reads block group descriptor entry from the
+ * the GDT table located right after the super block. This entry
+ * is 32 bytes in size and stores all the meta data related to the
+ * block group including the inode table offset
+ *
+ * @block_group_number : Block group number of the indode
+ */
 int read_gdt(int block_group_number)
 {
 	unsigned char gdt_entry[GDT_ENTRY_SIZE];
@@ -277,3 +296,4 @@ int read_gdt(int block_group_number)
 
 	return 0;
 }
+
