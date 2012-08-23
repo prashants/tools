@@ -53,6 +53,7 @@ int main(int argc, char *argv[])
 	int inode_grp_offset;
 	int superblock_present;
 	int offset;
+	int filesize;
 
 	uint32_t data32;
 	uint16_t data16;
@@ -147,7 +148,8 @@ int main(int argc, char *argv[])
 	data32 = (data32 << 8) | inode[6];
 	data32 = (data32 << 8) | inode[5];
 	data32 = (data32 << 8) | inode[4];
-	printf("Size : %d\n", data32);
+	filesize = data32;
+	printf("Size : %d\n", filesize);
 
 	// Address of direct block 0
 	data32 = inode[43];
@@ -162,10 +164,16 @@ int main(int argc, char *argv[])
 		close(fs);
 		return 1;
 	}
+
 	read(fs, blk, BLOCK_SIZE);
+
 	// Showing upto max first 1024 bytes by adding \0 in the data buffer
-	blk[1023] = '\0';
-	printf("Data 0 : %s\n", blk);
+	if (filesize < 1024) {
+		blk[filesize] = '\0';
+	} else {
+		blk[1024] = '\0';
+	}
+	printf("Data 0 (max 1024 bytes) :\n%s\n", blk);
 
 	close(fs);
 	return 0;
