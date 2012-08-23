@@ -41,8 +41,10 @@ int fs;				// The /dev entry for the file system
 
 int inode_table_addr;
 
+// Function prototypes
 int init_fs(void);
 int read_gdt(int);
+int check_superblock(int);
 
 int main(int argc, char *argv[])
 {
@@ -101,22 +103,12 @@ int main(int argc, char *argv[])
 	inode_grp_offset = ((inode_number - 1) % INODE_PER_GROUP) * INODE_SIZE;
 
 	// Super block copy present in block number 0, 1 and power of 3, 5, 7
-	superblock_present = 0;
-	if (blk_grp_number == 0)
-		superblock_present = 1;
-	else if (blk_grp_number == 1)
-		superblock_present = 1;
-	else if (blk_grp_number == 3)
-		superblock_present = 1;
-	else if (blk_grp_number == 5)
-		superblock_present = 1;
-	else if (blk_grp_number == 7)
-		superblock_present = 1;
-	else if (blk_grp_number == 9)
-		superblock_present = 1;
+	superblock_present = check_superblock(blk_grp_number);
 
-	printf("Inode number: %d (offset = %d)\n", inode_number, inode_grp_offset);
-	printf("Block number: %d (super block = %d)\n", blk_grp_number, superblock_present);
+	printf("Inode number: %d (offset = %d)\n",
+			inode_number, inode_grp_offset);
+	printf("Block number: %d (super block = %d)\n",
+			blk_grp_number, superblock_present);
 
 	close(fd);
 
@@ -125,8 +117,9 @@ int main(int argc, char *argv[])
 		return 1;
 	}
 
-	printf("Inode table entry at : %d\n", (inode_table_addr * BLOCK_SIZE) + inode_grp_offset);
-	if (lseek(fs, (inode_table_addr * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
+	offset = (inode_table_addr * BLOCK_SIZE) + inode_grp_offset;
+	printf("Inode table entry at : %d\n", offset);
+	if (lseek(fs, offset, 0) < 0) {
 		printf("Failed to seek to inode table entry\n");
 		close(fs);
 		return 1;
@@ -240,8 +233,9 @@ int init_fs(void)
 	RESERVE_GDT = data16;
 	printf("Reserve GDT size : %d\n", RESERVE_GDT);
 
-	SUPERBLOCK_SIZE = 1;		// Super block size is always 1024 bytes = max 1 block
-	printf("Super Block : %d\n", SUPERBLOCK_SIZE);
+	// Super block size is always 1024 bytes = max 1 block
+	SUPERBLOCK_SIZE = 1;
+	printf("Super Block size : %d\n", SUPERBLOCK_SIZE);
 
 	if (BLOCK_SIZE == 1024) {
 		FIRST_BLOCK = 1;
@@ -266,18 +260,20 @@ int init_fs(void)
  * is 32 bytes in size and stores all the meta data related to the
  * block group including the inode table offset
  *
- * @block_group_number : Block group number of the indode
+ * @block_group_number : Block group number of the inode
  */
 int read_gdt(int block_group_number)
 {
 	unsigned char gdt_entry[GDT_ENTRY_SIZE];
-	int i;
 	uint32_t data32;
+	int offset;
 
-	// Reading file system super block
-	// Offset = 1024 for boot block + 1024 for super block
-	printf("Block group offset in GDT table : %d\n", 1024 + 1024 + (block_group_number * GDT_ENTRY_SIZE));
-	if (lseek(fs, 1024 + 1024 + (block_group_number * GDT_ENTRY_SIZE), 0) < 0) {
+	// Reading GDT table entry for the block group number
+	// Offset = boot block + super block (FIRST_BLOCK) + GDT table block
+	offset = ((FIRST_BLOCK + 1) * BLOCK_SIZE)
+			+ (block_group_number * GDT_ENTRY_SIZE);
+	printf("Block group offset in GDT table : %d\n", offset);
+	if (lseek(fs, offset, 0) < 0) {
 		printf("Failed to seek to GDT entry for the block group\n");
 		return 1;
 	}
@@ -301,6 +297,56 @@ int read_gdt(int block_group_number)
 	data32 = (data32 << 8) | gdt_entry[8];
 	inode_table_addr = data32;
 	printf("Inode table : %d\n", data32);
+
+	return 0;
+}
+
+/**
+ * check_superblock() - Check whether block group contains copy of superblock
+ *
+ * This function checks if the block group contains copy of superblock
+ * or not. Only block group number that are 0, 1 or power of 3, 5, 7
+ * contain copy of super bock
+ *
+ * @block_group_number 	: Block group number of the inode
+ * @ret			: return 1 if true
+ */
+int check_superblock(int block_group_number)
+{
+	int n;
+
+	// Check if 0 or 1
+	n = block_group_number;
+	if (n == 0 || n == 1) {
+		return 1;
+	}
+
+	// Check if power of 3
+	n = block_group_number;
+	while ((n % 3) == 0) {
+		n /= 3;
+	}
+	if (n == 1) {
+		return 1;
+	}
+
+	// Check if power of 5
+	n = block_group_number;
+	while ((n % 5) == 0) {
+		n /= 5;
+	}
+	if (n == 1) {
+		return 1;
+	}
+
+	// Check if power of 7
+	n = block_group_number;
+	while ((n % 7) == 0) {
+		n /= 7;
+	}
+	if (n == 1) {
+		return 1;
+	}
 
 	return 0;
 }
