@@ -39,7 +39,10 @@ int FIRST_BLOCK;		// Block number of the first block
 
 int fs;				// The /dev entry for the file system
 
+int inode_table_addr;
+
 int init_fs(void);
+int read_gdt(int);
 
 int main(int argc, char *argv[])
 {
@@ -113,51 +116,18 @@ int main(int argc, char *argv[])
 
 	close(fd);
 
-	// read inode bitmap, if super block is present then the offset of
-	// inode bitmap is after adding all the super block offsets
-	if (superblock_present == 1) {
-		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + SUPERBLOCK_SIZE + GDT_SIZE + RESERVE_GDT + 1;
-		printf("Inode bitmap at : %d\n", offset);
-		if (lseek(fs, offset * BLOCK_SIZE, 0) < 0) {
-			printf("Failed to seek to inode bitmap\n");
-			return 1;
-		}
-	} else {
-		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + 1;
-		printf("Inode bitmap at : %d\n", offset);
-		if (lseek(fs, offset * BLOCK_SIZE, 0) < 0) {
-			printf("Failed to seek to inode bitmap\n");
-			return 1;
-		}
+	if (read_gdt(blk_grp_number) < 0) {
+		return 1;
 	}
-	read(fs, inode_bitmap, BLOCK_SIZE);
 
-	// read inode table, if super block is present then the offset of
-	// inode bitmap is after adding all the super block offsets
-	if (superblock_present == 1) {
-		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + SUPERBLOCK_SIZE + GDT_SIZE + RESERVE_GDT + 2;
-		printf("Inode table at : %d\n", offset);
-		printf("Inode table entry at : %d\n", (offset * BLOCK_SIZE) + inode_grp_offset);
-		if (lseek(fs, (offset * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
-			printf("failed to seek to inode table\n");
-			return 1;
-		}
-	} else {
-		offset = (blk_grp_number * BLOCKS_PER_GROUP) + FIRST_BLOCK + 2;
-		printf("Inode table at : %d\n", offset);
-		printf("Inode table at : %d\n", (offset * BLOCK_SIZE) + inode_grp_offset);
-		if (lseek(fs, (offset * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
-			printf("failed to seek to inode table\n");
-			return 1;
-		}
+	printf("Inode table entry at : %d\n", (inode_table_addr * BLOCK_SIZE) + inode_grp_offset);
+	if (lseek(fs, (inode_table_addr * BLOCK_SIZE) + inode_grp_offset, 0) < 0) {
+		printf("Failed to seek to inode table entry\n");
+		return 1;
 	}
-	// dump inode table data
+
+	// read inode table
 	read(fs, inode, INODE_SIZE);
-	printf("Inode dump :\n");
-	for (i = 0; i < INODE_SIZE; i++) {
-		printf("%d ", inode[i]);
-	}
-	printf("\n");
 
 	// decoding inode data which in is LE format
 	// http://wiki.osdev.org/Ext2
@@ -267,6 +237,43 @@ int init_fs(void)
 	data32 = ceil((float)TOTAL_BLOCKS / BLOCKS_PER_GROUP) * GDT_ENTRY_SIZE;
 	GDT_SIZE = ceil((float)data32 / BLOCK_SIZE);
 	printf("GDT size : %d\n", GDT_SIZE);
+
 	return 0;
 }
 
+int read_gdt(int block_group_number)
+{
+	unsigned char gdt_entry[GDT_ENTRY_SIZE];
+	int i;
+	uint32_t data32;
+
+	// Reading file system super block
+	// Offset = 1024 for boot block + 1024 for super block
+	printf("Block group offset in GDT table : %d\n", 1024 + 1024 + (block_group_number * GDT_ENTRY_SIZE));
+	if (lseek(fs, 1024 + 1024 + (block_group_number * GDT_ENTRY_SIZE), 0) < 0) {
+		printf("Failed to seek to GDT entry for the block group\n");
+		return 1;
+	}
+	read(fs, gdt_entry, GDT_ENTRY_SIZE);
+
+	data32 = gdt_entry[3];
+	data32 = (data32 << 8) | gdt_entry[2];
+	data32 = (data32 << 8) | gdt_entry[1];
+	data32 = (data32 << 8) | gdt_entry[0];
+	printf("Block usage bitmap : %d\n", data32);
+
+	data32 = gdt_entry[7];
+	data32 = (data32 << 8) | gdt_entry[6];
+	data32 = (data32 << 8) | gdt_entry[5];
+	data32 = (data32 << 8) | gdt_entry[4];
+	printf("Inode usage bitmap : %d\n", data32);
+
+	data32 = gdt_entry[11];
+	data32 = (data32 << 8) | gdt_entry[10];
+	data32 = (data32 << 8) | gdt_entry[9];
+	data32 = (data32 << 8) | gdt_entry[8];
+	inode_table_addr = data32;
+	printf("Inode table : %d\n", data32);
+
+	return 0;
+}
